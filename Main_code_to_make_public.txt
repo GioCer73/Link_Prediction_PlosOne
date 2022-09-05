@@ -1,0 +1,709 @@
+********************************************************************************
+* Filename: "Do_file_7STUDENT.do" 
+* Date: 11/03/2021
+* Dateset: "link_prediction"
+********************************************************************************
+
+********************************************************************************
+* DEFINE A GLOBAL FOR THE THREE SCIENTIFIC SECTORS
+********************************************************************************
+global SECTOR "SSH PE LS"
+********************************************************************************
+* LOOP OVER "SECTOR"
+********************************************************************************
+foreach S of global SECTOR{ // Begin loop on SECTOR
+********************************************************************************
+clear all
+********************************************************************************
+* DEFINE A GLOBAL "LEARNERS" CONTAINING ALL THE CONSIDERED LEARNERS
+******************************************************************************** 
+global LEARNERS "boost multinomial naivebayes nearestneighbor neuralnet randomforest regularizedmultinomial svm tree"
+********************************************************************************
+global M: word count $LEARNERS
+di "THE NUMBER OF LEARNERS IS: " $M
+********************************************************************************
+* DEFINE A GLOBAL "UNDER_SAMPLING" THAT CAN TAKE VALUES ["yes","no"].
+******************************************************************************** 
+* "yes" = The class with larger imbalance ("link1=0") will be under-sampled,
+*         that is, we delete at random a series of observations so to get
+*         an equal number of observetions for "link1=0" and "link1=1"
+********************************************************************************
+*  "no" = We leave the data as they are. 
+******************************************************************************** 
+global UNDER_SAMPLING "yes"
+********************************************************************************
+global m: word count $LEARNERS
+mat M=J($m,3,.)
+********************************************************************************
+
+********************************************************************************
+* LOAD THE DATASET AND SET THE SEED
+********************************************************************************
+clear
+cd "~/Dropbox/Paper_network_ML_zinilli/RESULTS_`S'"
+use link_prediction_`S'.dta , clear
+tab link1 , mis
+********************************************************************************
+if "$UNDER_SAMPLING"=="yes"{
+set seed 1010
+gen random=rbinomial(1,.03516097) if link1==0
+tab random , mis
+drop if random==0	
+}
+********************************************************************************
+* STANDARDIZE THE FEATURES
+********************************************************************************
+global X1 totalcorebudgeteuro1 totalcorebudgeteuro _meancitationscore1 _meancitationscore ///
+gdppc1 gdppc betweennesscentrality1 betweennesscentrality ///
+Student1 Student  Jaccard
+********************************************************************************
+global X ""
+foreach V of global X1{
+egen `V'_std=std(`V')
+global X $X `V'_std
+}
+********************************************************************************
+global Y "link1"
+********************************************************************************
+
+********************************************************************************
+recode link1 (0=1) (1=2)
+set seed 12345
+********************************************************************************  
+reg $Y $X
+********************************************************************************
+gen mysample=e(sample)
+keep if mysample==1
+********************************************************************************
+
+********************************************************************************
+* TABSTAT TABLES (AS "WORD" FILE)
+********************************************************************************
+replace totalcorebudgeteuro1=totalcorebudgeteuro1/1000000
+replace totalcorebudgeteuro=totalcorebudgeteuro/1000000
+********************************************************************************
+* Create a "tabstat" type table  
+set more off
+* Step 1. Use "espost"
+estpost tabstat $X1 , ///
+statistics(count mean sd p50 min max) columns(statistics) listwise
+* Step 2. Use "esttab"
+esttab . using "Table_descriptives.tex", ///
+cells("count mean(fmt(a1)) sd(fmt(a1)) p50(fmt(a1)) min(fmt(a1)) max(fmt(a1))") ///
+coeflabels( ///
+totalcorebudgeteuro1 "Core budget - Node 1" ///
+totalcorebudgeteuro  "Core budget - Node 2" ///
+_meancitationscore1  "Mean citation score - Node 1" ///
+_meancitationscore  "Mean citation score - Node 2" ///
+gdppc1  "GDP per capita - Node 1"  ///
+gdppc  "GDP per capita - Node 2"  ///
+betweennesscentrality1 "Betweenness centrality - Node 1" ///
+betweennesscentrality "Betweenness centrality - Node 2" ///
+Student1 "Total Students - Node 1" /// 
+Student  "Total Students - Node 2" ///
+Jaccard "Jaccard index" ///
+)  ///
+collabels(N Mean "Std. Dev." Median Minimum Maximum) ///
+title(Descriptive statistics of the features.) ///
+addnotes("NOTE: Only estimation sample considered.")  ///
+replace 
+
+********************************************************************************
+
+********************************************************************************
+* Keep only the relevant variables and save as "mydata.dta"
+********************************************************************************
+keep $Y $X
+********************************************************************************
+* RE-STANDARDIZE THE FEATURES
+********************************************************************************
+global XVARS ///
+totalcorebudgeteuro1 totalcorebudgeteuro _meancitationscore1 _meancitationscore gdppc1 gdppc betweennesscentrality1 betweennesscentrality Student1 Student  Jaccard
+********************************************************************************
+foreach V of global XVARS{
+rename `V'_std `V'
+}
+********************************************************************************
+global X1 totalcorebudgeteuro1 totalcorebudgeteuro _meancitationscore1 _meancitationscore ///
+gdppc1 gdppc betweennesscentrality1 betweennesscentrality ///
+Student1 Student  Jaccard
+********************************************************************************
+global X ""
+foreach V of global X1{
+egen `V'_std=std(`V')
+global X $X `V'_std
+}
+********************************************************************************
+keep $Y $X  // keep only the variables that matter
+********************************************************************************
+save mydata , replace  // fitting dataset (NO MISSING VALUES)
+********************************************************************************
+
+********************************************************************************
+* FORM THE TEST DATASET "D_test"
+********************************************************************************
+set seed 1234
+splitsample, generate(sample) nsplit(2)
+label define svalues 1 "Training" 2 "Testing"
+label values sample svalues
+********************************************************************************
+preserve
+keep if sample==1
+drop sample
+save D_train , replace nolabel
+restore
+preserve
+keep if sample==2
+drop link1 sample
+save D_test , replace nolabel
+restore
+********************************************************************************
+
+*
+*
+*
+
+********************************************************************************
+* LOAD THE DATASET "mydata" FOR ML FITTING
+********************************************************************************
+use mydata , clear
+********************************************************************************
+*
+********************************************************************************
+* RUN THE ML METHODS USING "mydata"
+********************************************************************************
+local i=1
+********************************************************************************
+foreach L of global LEARNERS{
+********************************************************************************
+c_ml_stata $Y $X , mlmodel(`L') in_prediction("in_pred_`i'") cross_validation("CV_`i'") ///
+out_sample("D_test") out_prediction("out_pred_`i'") seed(10) save_graph_cv("graph_cv_`i'")
+********************************************************************************
+mat M[`i',1]=e(TRAIN_ACCURACY)
+mat M[`i',2]=e(TEST_ACCURACY)
+mat M[`i',3]=e(BEST_INDEX) 
+mat colnames M = TRAIN_ACCURACY TEST_ACCURACY index
+mat rownames M = `L'
+********************************************************************************
+local i=`i'+1
+}
+*******************************************************************************
+*
+********************************************************************************
+mat list M
+clear
+svmat M , n(col)
+gen Learner=""
+local i=1
+foreach L of global LEARNERS{
+replace Learner="`L'" in `i'
+local i=`i'+1
+}
+********************************************************************************
+replace index=int(index)
+save RES , replace
+********************************************************************************
+* GENERATE THE OVERALL CV-GRAPHS
+********************************************************************************
+global TOT ""
+forvalues i=1/$M{
+global TOT $TOT graph_cv_`i'.gph
+}
+graph combine $TOT , scale(*0.5) plotregion(style(none)) scheme(s1mono) 
+graph export cv_graph_all.png , as(png) replace
+********************************************************************************
+*
+*
+*
+********************************************************************************
+* FOREST PLOT OF THE ACCURACY BY LEARNER: AVERAGE & STANDARD DEVIATION 
+********************************************************************************
+clear
+********************************************************************************
+global CV ""
+forvalues i=1/$M{
+	use CV_`i'
+	local L: word `i' of $LEARNERS
+	cap drop Learner
+	gen Learner="`L'"
+	save CV_`i' , replace
+	global CV $CV CV_`i'
+}
+********************************************************************************
+clear
+append using $CV
+tab Learner , mis
+********************************************************************************
+merge 1:1 index Learner using RES
+keep if _merge==3
+sort Learner
+********************************************************************************
+sum mean_test_score 
+global MEAN=r(mean)
+********************************************************************************
+replace Learner="Boosting" in 1
+replace Learner="Mutinomial" in 2
+replace Learner="Naive Bayes" in 3
+replace Learner="Nearest neighbor" in 4
+replace Learner="Neural network" in 5
+replace Learner="Random forest" in 6
+replace Learner="Regularized multinomial" in 7
+replace Learner="Support vector machine" in 8
+replace Learner="Tree" in 9
+********************************************************************************
+cap drop C
+gen C=`"""'
+cap drop A
+gen A=_n
+tostring A,replace
+cap drop _L
+gen _L= A + " " + C + Learner + C
+********************************************************************************
+levelsof _L , local(XX) clean
+global XX `XX'
+********************************************************************************
+*
+********************************************************************************
+cap drop _id
+gen _id=_n
+cap drop lo
+gen lo=mean_test_score-1.96*std_test_score
+cap drop hi
+gen hi=mean_test_score+1.96*std_test_score
+********************************************************************************
+format mean_test_score %12.3g
+********************************************************************************
+gsort - Learner
+twoway (rcap lo hi _id , horizontal ) (scatter  _id mean_test_score , ///
+msymbol(S) msize(small) mcolor(black) mlabel(mean_test_score) mlabposition(12) mlabc(red) mlabs(medlarge)) , ///
+ylabel($XX , angle(0)) ytitle("") ///
+plotregion(style(none)) scheme(s1mono) xtitle("") legend(off) xline($MEAN , lc(orange) lpattern(dash) lw(medthick) ) ///
+xtitle(Test accuracy) note("NOTE: Prob[Link='no'] put undersampled to be equal to Prob[Link='yes']")
+graph export forestplot_zc_undersampled.png , as(png) replace
+********************************************************************************
+*
+********************************************************************************
+* GENERATE A TABLE REPORTING ALL THE RESULTS
+********************************************************************************
+preserve
+keep Learner TRAIN_ACCURACY mean_test_score
+la var TRAIN_ACCURACY "TRAIN ACCURACY"
+la var mean_test_score "TEST ACCURACY"
+texsave Learner TRAIN_ACCURACY mean_test_score ///
+using "train_test_acc.tex" , frag  replace ///
+varlabels  ///
+title("Point estimation of the training-- and of the test--accuracy in predicting network link formation by learner") ///
+label("tab2")
+restore
+********************************************************************************
+
+*
+*
+*
+
+********************************************************************************
+* INFERENCE: ESTIMATING "PARTIAL DERIVATIVES" OF A MACHINE LEARNING MODEL
+********************************************************************************
+* For each "xi", generate Bi=(x1,...,x-i,...,xp) and put them equal to their mean 
+* (that in this case is "zero"). For example, when i=1, B1=(x2,x3,x4)
+******************************************************************************** 
+global LEARNERS "boost multinomial naivebayes nearestneighbor neuralnet randomforest regularizedmultinomial svm tree"
+********************************************************************************
+local H=1
+foreach L of global LEARNERS{
+set varabbrev off
+clear
+cd "~/Dropbox/Paper_network_ML_zinilli/RESULTS_`S'"
+use link_prediction_`S'.dta , clear
+********************************************************************************
+*
+********************************************************************************
+if "$UNDER_SAMPLING"=="yes"{
+set seed 1010
+gen random=rbinomial(1,.03516097) if link1==0
+tab random , mis
+drop if random==0	
+}
+********************************************************************************
+gen core_budget = (totalcorebudgeteuro1 + totalcorebudgeteuro)/2
+gen mean_cit_score = (_meancitationscore1 + _meancitationscore)/2
+gen gdp = (gdppc1 + gdppc)/2
+gen betw_centr = (betweennesscentrality1 + betweennesscentrality)/2
+gen tot_stud = (Student1 + Student)/2
+********************************************************************************
+global X1 "core_budget mean_cit_score gdp betw_centr tot_stud  Jaccard"
+********************************************************************************
+global X ""
+foreach V of global X1{
+egen `V'_std=std(`V')
+global X $X `V'_std
+}
+********************************************************************************
+global Y "link1"
+********************************************************************************
+keep $Y $X
+********************************************************************************
+recode link1 (0=1) (1=2)
+set seed 12345
+********************************************************************************  
+qui reg $Y $X
+********************************************************************************
+gen mysample=e(sample)
+keep if mysample==1
+********************************************************************************
+save mydata , replace 
+********************************************************************************
+
+********************************************************************************
+* LOAD THE DATASET AND SET THE SEED
+********************************************************************************
+set seed 1234
+splitsample, generate(sample) nsplit(2)
+label define svalues 1 "Training" 2 "Testing"
+label values sample svalues
+********************************************************************************
+preserve
+keep if sample==1
+drop mysample sample
+save D_train , replace nolabel
+restore
+preserve
+keep if sample==2
+drop link1 mysample sample
+save D_test , replace nolabel
+restore
+********************************************************************************
+* 
+********************************************************************************
+use D_train , clear
+********************************************************************************
+gen x1=core_budget_std 
+la var x1 "Total Core Budget"
+gen x2=mean_cit_score_std 
+la var x2 "Mean Citation Score"
+gen x3=gdp_std 
+la var x3 "GDP per capita"
+gen x4=betw_centr_std
+la var x4 "Betweenness Centrality"
+gen x5=tot_stud_std
+la var x5 "Total Students"
+gen x6=Jaccard_std
+la var x6 "Jaccard index"
+********************************************************************************
+gen y=link1
+********************************************************************************
+keep  y x1 x2 x3 x4 x5 x6
+order y x1 x2 x3 x4 x5 x6
+********************************************************************************
+* Put the number of features int a local "p"
+********************************************************************************
+global VV "x1 x2 x3 x4 x5 x6"
+global p: word count $VV
+di in red "The number of features is: " $p
+********************************************************************************
+save "c_ml_stata_data_example_`H'.dta" , replace
+
+********************************************************************************
+forvalues i=1/$p{
+********************************************************************************
+* Open the initial dataset D=[y,x1,x2,x3,x4,x5,x6]
+********************************************************************************
+use "c_ml_stata_data_example_`H'.dta" , clear
+********************************************************************************
+* Standardize (mean=0, var=1) the all predictors (x1,x2,x3,x4,x5,x6)
+********************************************************************************
+foreach V of global VV{
+egen `V'_std=std(`V')
+replace `V'=`V'_std
+drop `V'_std
+}
+********************************************************************************
+* Generate B1, B2,..., Bp
+********************************************************************************
+local B`i' ""
+forvalues j=1/$p{
+if `i'!=`j'{
+local B`i' `B`i'' x`j'  	
+}
+}
+********************************************************************************
+* In each variable x in Bi, replace values of x with mean(x)
+* This is to neutralize the effect of this variables, by leaving active
+* only the effect of xi. 
+********************************************************************************
+global VARS `B`i''
+foreach V of global VARS{
+qui sum `V'
+replace `V'=r(mean)	
+}
+********************************************************************************
+* Delete "y"
+drop y
+********************************************************************************
+* Save this "new" dataset (we use it to predict on it the derivatives)
+save "c_ml_stata_data_deriv_`H'_`i'" , replace
+********************************************************************************
+* Open again the initial dataset
+********************************************************************************
+use "c_ml_stata_data_example_`H'.dta"
+********************************************************************************
+* Standardize again (mean=0, var=1) the predictors (x1,x2,x3,x4)
+********************************************************************************
+foreach V of global VV{
+egen `V'_std=std(`V')
+replace `V'=`V'_std
+drop `V'_std
+}
+********************************************************************************
+* Fit the ML model on the previous dataset, using as "new-dataset" 
+* "c_ml_stata_data_deriv_`H'_`i'.dta" 
+********************************************************************************
+c_ml_stata y $VV , mlmodel(`L') in_prediction("in_pred_deriv") cross_validation("CV_deriv_`H'") ///
+out_sample("c_ml_stata_data_deriv_`H'_`i'") out_prediction("out_pred_deriv_`H'_`i'") seed(10) save_graph_cv("graph_cv_deriv_`H'")
+********************************************************************************
+* Open the resulting dataset when there are the prediction on "y" when x1 varies and 
+* (x2,x3,x4) fixed at their means
+********************************************************************************
+* use out_pred_deriv_`i' , clear
+********************************************************************************
+* Extract "xi" from the original datset 
+********************************************************************************
+use "c_ml_stata_data_example_`H'.dta" , clear
+keep x`i'
+gen index=_n-1
+********************************************************************************
+* Merge xi with "out_pred_deriv_`i'" so to have a dataset containing 
+* the "predictions" and "xi"
+********************************************************************************
+merge 1:1 index using out_pred_deriv_`H'_`i'
+********************************************************************************
+* Plot them jointly
+********************************************************************************
+tw (line Prob_1 x`i', sort)  , saving(G_`i' , replace) 
+******************************************************************************** 
+save data_deriv_`H'_`i' , replace
+********************************************************************************
+}
+********************************************************************************
+* GENERATE THE GRAPH
+********************************************************************************
+global VV "x1 x2 x3 x4 x5 x6"
+local p: word count $VV
+di in red "The number of features is: " $p
+********************************************************************************
+local x1 "Total Core Budget"
+local x2 "Mean Citation Score"
+local x3 "GDP per capita"
+local x4 "Betweenness Centrality"
+local x5 "Total Students"
+local x6 "Jaccard index"
+********************************************************************************
+forvalues i=1/$p{
+use data_deriv_`H'_`i' , replace
+la var x`i' "`x`i''"
+tw (line Prob_1 x`i', sort)  , ///
+saving(G_`i' , replace) plotregion(style(none)) scheme(s1mono) ///
+ytitle("Pr(Link=Yes)")
+}
+********************************************************************************
+
+********************************************************************************
+* COMBINE THE GRAPHS OF THE PARTIAL EFFECTS FOR EACH LEARNER 
+********************************************************************************
+global GR ""
+forvalues i=1/$p{
+global GR $GR G_`i'.gph
+}
+graph combine $GR , scale(*0.8) plotregion(style(none)) scheme(s1mono) note("LEARNER: `L'")
+graph export marginal_effects_`H'.png , as(png) replace
+********************************************************************************
+local H=`H'+1
+********************************************************************************
+} 
+********************************************************************************
+
+*
+
+********************************************************************************
+* COMBINE ALL THE LEARNERS TO GET ONE SINGLE SUPER-LEARNER
+********************************************************************************
+forvalues j=1/$M{
+	forvalues i=1/$p{
+	use data_deriv_`j'_`i' , clear
+	rename Prob_1 Prob_1_`j'_`i' 
+	rename Prob_2 Prob_2_`j'_`i' 
+	rename label_out_pred label_out_pred_`j'_`i'
+	drop _merge
+	save data_deriv_`j'_`i' , replace
+}
+}
+********************************************************************************
+use data_deriv_1_1 , clear
+forvalues j=1/$M{
+forvalues i=1/$p{
+merge 1:1 index using data_deriv_`j'_`i' 
+drop _merge
+}
+}
+********************************************************************************
+save data_prob_all , replace
+********************************************************************************
+
+*
+********************************************************************************
+* MARGINAL PROBABILITY AND DERIVATIVE USING THE SUPER-LEARNER
+********************************************************************************
+use data_prob_all , clear
+********************************************************************************
+forvalues i=1/$p{
+cap drop SUM1`i'
+gen SUM1`i'=0
+cap drop SUM2`i'
+gen SUM2`i'=0
+forvalues j=1/$M{
+	replace SUM1`i' = SUM1`i' + Prob_1_`j'_`i'
+	replace SUM2`i' = SUM2`i' + Prob_2_`j'_`i'
+}
+replace SUM1`i'=SUM1`i'/$M
+replace SUM2`i'=SUM2`i'/$M
+}
+********************************************************************************
+* Graph probabilities (average on learners)
+********************************************************************************
+forvalues i=1/$p{
+tw (line SUM1`i' x`i', sort) , ///
+plotregion(style(none)) scheme(s1mono) ///
+ytitle("Pr(Link=Yes)") saving(P_`i' , replace)
+}
+********************************************************************************
+* COMBINED GRAPH - MARGINAL EFFECTS 
+********************************************************************************
+global GR ""
+forvalues i=1/$p{
+global GR $GR P_`i'.gph
+}
+graph combine $GR , scale(*0.8) plotregion(style(none)) ///
+scheme(s1mono) note("MEASURE: Marginal effect" "METHOD: Average over all the learners")
+graph export marginal_effects_all.png , as(png) replace
+********************************************************************************
+save data_prob_all2 , replace
+********************************************************************************
+*
+********************************************************************************
+* DERIVATIVES for "x_j" CAN BE EASILY OBTAINED BY DIFFERENCING
+********************************************************************************
+use data_prob_all2 , clear 
+keep index SUM2* x*
+* Derivative for each x_j
+forvalues j=1/$p{
+tsset index
+cap drop L1_SUM2`j'
+gen L1_SUM2`j'=L1.SUM2`j'
+cap drop L1_x`j'
+gen L1_x`j'=L1.x`j'
+cap drop delta_x`j'
+gen delta_x`j' =x`j'-L1_x`j'
+gen delta_Prob_`j'=SUM2`j'-L1_SUM2`j'
+cap drop der_Prob_x`j'
+gen der_Prob_x`j'=delta_Prob_`j'/delta_x`j'
+winsor2 der_Prob_x`j'
+tw (line der_Prob_x`j'_w x`j', sort lp(dash_dot) lc(black)) ///
+(lowess der_Prob_x`j'_w x`j' , lc(red) lc(orange) lp(solid) lw(thick)) , ///
+plotregion(style(none)) scheme(s1mono) ///
+ytitle("{&Delta}Pr(Link=Yes)/{&Delta}x") ///
+legend(order(1 "Derivative" 2 "Smoother")) saving(D_`j' , replace)
+}
+********************************************************************************
+* COMBINED GRAPH - DERIVATIVE
+********************************************************************************
+global GR ""
+forvalues j=1/$p{
+global GR $GR D_`j'.gph
+}
+graph combine $GR , scale(*0.8) plotregion(style(none)) ///
+scheme(s1mono) ///
+note("MEASURE: Derivative" "METHOD: Average over all the learners" ///
+"ROBUSTNESS: Winsorized values")
+graph export derivative_effects_all.png , as(png) replace
+********************************************************************************
+*
+********************************************************************************
+* ELASTICITIES for "x_j" (part 1)
+********************************************************************************
+use data_prob_all2 , clear 
+keep index SUM2* x*
+* Elasticity for each x_j
+forvalues j=1/$p{
+tsset index
+cap drop L1_SUM2`j'
+gen L1_SUM2`j'=L1.SUM2`j'
+cap drop L1_x`j'
+gen L1_x`j'=L1.x`j'
+cap drop delta_x`j'
+gen delta_x`j' = (x`j'-L1_x`j')/L1_x`j'
+gen delta_Prob_`j'= (SUM2`j'-L1_SUM2`j')/L1_SUM2`j'
+cap drop der_Prob_x`j'
+gen der_Prob_x`j'=delta_Prob_`j'/delta_x`j' * 100
+winsor2 der_Prob_x`j'
+tw (line der_Prob_x`j'_w x`j', sort lp(dash_dot) lc(black)) ///
+(lowess der_Prob_x`j'_w x`j' , lc(red) lc(orange) lp(solid) lw(thick)) , ///
+plotregion(style(none)) scheme(s1mono) ///
+ytitle("{&Delta}%Pr(Link=Yes)/{&Delta}%x") ///
+legend(order(1 "Elasticity" 2 "Smoother")) saving(E_`j' , replace)
+}
+********************************************************************************
+* COMBINED GRAPH - ELASTICITY
+********************************************************************************
+global GR ""
+forvalues j=1/$p{
+global GR $GR E_`j'.gph
+}
+graph combine $GR , scale(*0.8) plotregion(style(none)) scheme(s1mono) ///
+note("MEASURE: Elasticity" ///
+"METHOD: Average over all the learners" ///
+"ROBUSTNESS: Winsorized values" ///
+"SCALE: % increase in the probabiity to link for a 100% increase in the feature")
+graph export elasticities_effects_all.png , as(png) replace
+********************************************************************************
+*
+********************************************************************************
+* ELASTICITIES for "x_j" (part 2)
+********************************************************************************
+use data_prob_all2 , clear 
+keep index SUM2* x*
+* Elasticity for each x_j
+forvalues j=1/$p{
+tsset index
+cap drop L1_SUM2`j'
+gen L1_SUM2`j'=L1.SUM2`j'
+cap drop L1_x`j'
+gen L1_x`j'=L1.x`j'
+cap drop delta_x`j'
+gen delta_x`j' = (x`j'-L1_x`j')/L1_x`j'
+gen delta_Prob_`j'= (SUM2`j'-L1_SUM2`j')/L1_SUM2`j'
+cap drop der_Prob_x`j'
+gen der_Prob_x`j'=delta_Prob_`j'/delta_x`j' * 100
+winsor2 der_Prob_x`j'
+line der_Prob_x`j'_w x`j', yline(0 , lc(orange) lw(thick)) sort lp(dash_dot) lc(gray%80)  ///
+plotregion(style(none)) scheme(s1mono) ///
+ytitle("{&Delta}%Pr(Link=Yes)/{&Delta}%x") ///
+saving(E_`j' , replace)
+}
+********************************************************************************
+* COMBINED GRAPH - ELASTICITY
+********************************************************************************
+global GR ""
+forvalues j=1/$p{
+global GR $GR E_`j'.gph
+}
+graph combine $GR , scale(*0.8) plotregion(style(none)) scheme(s1mono) ///
+note("MEASURE: Elasticity" ///
+"METHOD: Average over all the learners" ///
+"ROBUSTNESS: Winsorized values" ///
+"SCALE: % increase in the probabiity to link for a 100% increase in the feature")
+graph export elasticities_effects_all.png , as(png) replace
+********************************************************************************
+} // End loop on SECTOR
+********************************************************************************
+* END
+********************************************************************************
