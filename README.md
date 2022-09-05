@@ -12,10 +12,10 @@ INSTRUCTIONS TO REPRODUCE THE RESULTS OF THE PAPER
    
 3. The ADO-file "c_ml_stata.ado" calls Python scripts performing the different classifiers (learners) 
    estimated in the paper. These scripts have extension ".py" and are all contained into the 
-   "Python_learners" folder. You must cut and paste these python scripts into the Stata 
+   "Python_learners" folder. You must cut and paste these Python scripts into the Stata 
     sub-directory "ado/plus/py". For example, in my Mac, this is the name of the directory:
    "/Users/cerulli/Library/Application Support/Stata/ado/plus/py"
    
-IMPORTANT: if you do not know where your Stata plus directory is located, you must type the command:
+IMPORTANT: if you do not know where your Stata "ado\plus" directory is located, you must type the command:
 . sysdir
 and you will know the correct path. 
